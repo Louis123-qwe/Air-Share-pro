@@ -213,6 +213,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
         <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(0,200,255,0.15)" stroke-width="3"/>
         <circle id="grabArc" cx="40" cy="40" r="36" fill="none" stroke="var(--cyan)" stroke-width="3" stroke-linecap="round" stroke-dasharray="226" stroke-dashoffset="226" transform="rotate(-90 40 40)" style="transition:stroke-dashoffset .1s;filter:drop-shadow(0 0 6px var(--cyan))"/>
       </svg>
+      <!-- Live gesture debug -->
+      <div id="gestureDebug" style="font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--dim);background:rgba(3,5,8,0.75);padding:3px 10px;border-radius:6px;margin-bottom:4px;">LOADING…</div>
       <div class="gesture-bar">
         <div class="g-chip" id="chipGrab"><span class="gico">✊</span>GRAB</div>
         <div class="g-chip" id="chipPalm"><span class="gico">🤚</span>PALM</div>
@@ -532,26 +534,69 @@ const video=document.getElementById('video');
 let mpCamera;
 
 function detectGesture(lm){
-  if(!lm||lm.length<21)return'none';
-  const ext=[false,false,false,false,false];
-  ext[0]=Math.abs(lm[4].x-lm[2].x)>0.05;
-  const tips=[8,12,16,20],pips=[6,10,14,18];
-  for(let i=0;i<4;i++)ext[i+1]=lm[tips[i]].y<lm[pips[i]].y-0.02;
-  const cnt=ext.filter(Boolean).length;
-  const pd=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
-  if(cnt===0)return'grab';
-  if(pd<0.07&&!ext[2]&&!ext[3]&&!ext[4])return'pinch';
-  if(ext[1]&&!ext[2]&&!ext[3]&&!ext[4])return'point';
-  if(cnt>=4)return'open';
-  return'none';
+  if(!lm||lm.length<21) return 'none';
+
+  // Key landmarks
+  // Tips:   thumb=4, index=8, middle=12, ring=16, pinky=20
+  // MCP:    thumb=2, index=5, middle=9,  ring=13, pinky=17
+  // Wrist:  0
+
+  const wrist   = lm[0];
+  const thumbTip= lm[4];
+  const indexTip= lm[8];
+
+  // ── FIST DETECTION (generous) ──────────────────────────────────────────
+  // Measure how close each fingertip is to the wrist.
+  // On a real fist all tips are much closer to wrist than when open.
+  const wristToIndex = Math.hypot(indexTip.x-wrist.x, indexTip.y-wrist.y);
+  const wristToMiddle= Math.hypot(lm[12].x-wrist.x, lm[12].y-wrist.y);
+  const wristToRing  = Math.hypot(lm[16].x-wrist.x, lm[16].y-wrist.y);
+  const wristToPinky = Math.hypot(lm[20].x-wrist.x, lm[20].y-wrist.y);
+
+  // All 4 fingertips close to wrist = fist. Threshold 0.35 is generous for mobile.
+  const isFist = wristToIndex<0.35 && wristToMiddle<0.35 &&
+                 wristToRing<0.35  && wristToPinky<0.35;
+
+  if(isFist) return 'grab';
+
+  // ── OPEN PALM (generous) ──────────────────────────────────────────────
+  // At least 3 of 4 fingers clearly extended (tip far from wrist)
+  const farCount = [wristToIndex,wristToMiddle,wristToRing,wristToPinky]
+    .filter(d=>d>0.45).length;
+  if(farCount>=3) return 'open';
+
+  // ── POINT ─────────────────────────────────────────────────────────────
+  // Index extended, others not
+  const indexExtended = wristToIndex > 0.42;
+  const othersDown    = wristToMiddle<0.35 && wristToRing<0.35 && wristToPinky<0.35;
+  if(indexExtended && othersDown) return 'point';
+
+  // ── PINCH ─────────────────────────────────────────────────────────────
+  const pinchDist = Math.hypot(thumbTip.x-indexTip.x, thumbTip.y-indexTip.y);
+  if(pinchDist<0.07) return 'pinch';
+
+  return 'none';
 }
 
 const hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-hands.setOptions({maxNumHands:1,modelComplexity:1,minDetectionConfidence:0.72,minTrackingConfidence:0.65});
+// Lower confidence = detects more reliably on mobile in varied lighting
+hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
 hands.onResults(r=>{
   const lm=r.multiHandLandmarks?.[0];
   const g=detectGesture(lm);
-  if(myMode==='sender')processSender(g);
+
+  // Live debug — shows current detected gesture on screen
+  const dbg=document.getElementById('gestureDebug');
+  if(dbg){
+    if(!lm){ dbg.textContent='NO HAND DETECTED'; dbg.style.color='var(--dim)'; }
+    else {
+      const icons={grab:'✊ GRAB',open:'🤚 OPEN',point:'☝️ POINT',pinch:'🤏 PINCH',none:'✋ NONE'};
+      dbg.textContent=icons[g]||g;
+      dbg.style.color=g==='grab'?'var(--red)':g==='open'?'var(--green)':'var(--cyan)';
+    }
+  }
+
+  if(myMode==='sender') processSender(g);
   else processReceiver(g);
 });
 
