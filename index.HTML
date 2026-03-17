@@ -628,7 +628,7 @@ function detectGesture(kp){
 
   const dist=(a,b)=>Math.hypot(px(a)-px(b),py(a)-py(b));
   const palmSize=dist(0,9);
-  if(palmSize<1)return'none';
+  if(palmSize<0.01)return'none'; // normalized coords — 0.01 not 1
 
   const curls=[
     dist(8, 5)/palmSize,  // index
@@ -637,9 +637,9 @@ function detectGesture(kp){
     dist(20,17)/palmSize  // pinky
   ];
 
-  // Guard against NaN values
-  if(curls.some(c=>isNaN(c))){
-    updateDebug('BAD KEYPOINTS — move hand','var(--red)');
+  // Guard against NaN values only
+  if(curls.some(c=>isNaN(c)||!isFinite(c))){
+    updateDebug('KEYPOINT ERROR — reposition hand','var(--red)');
     return'none';
   }
 
