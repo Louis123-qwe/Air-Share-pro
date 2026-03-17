@@ -4,10 +4,31 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <title>PHYSIX SHARE</title>
-<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-<!-- html2canvas removed — using native Canvas API instead -->
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<!-- TensorFlow.js + HandPose — more reliable on mobile than MediaPipe -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.0/dist/hand-pose-detection.min.js"></script>
+<script>
+// Safety check — if PeerJS failed to load, dynamically retry with backup CDN
+window.addEventListener('DOMContentLoaded', function() {
+  if (typeof Peer === 'undefined') {
+    console.warn('PeerJS not loaded, retrying with backup CDN...');
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js';
+    s.onload = function(){ console.log('PeerJS loaded from backup CDN'); };
+    s.onerror = function(){ 
+      document.getElementById('peerError').style.display='block';
+    };
+    document.head.appendChild(s);
+  }
+  if (typeof handPoseDetection === 'undefined') {
+    console.warn('HandPose not loaded, retrying...');
+    var s2 = document.createElement('script');
+    s2.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js';
+    document.head.appendChild(s2);
+  }
+});
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;600;700&family=Share+Tech+Mono&display=swap');
 :root{--bg:#030508;--surface:#080d14;--card:#0c1520;--border:rgba(0,200,255,0.15);--cyan:#00c8ff;--cyan2:#00fff7;--amber:#ffb800;--red:#ff3c5a;--green:#00ff88;--purple:#a855f7;--text:#c5dff0;--dim:#3a5a6a;--glow:rgba(0,200,255,0.12);}
@@ -128,6 +149,10 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 </head>
 <body>
 <div id="stars"></div>
+<!-- CDN error banner -->
+<div id="peerError" style="display:none;position:fixed;top:0;left:0;right:0;z-index:999;background:var(--red);color:#fff;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;padding:10px;text-align:center;">
+  ⚠ NETWORK ERROR — Check your connection and reload
+</div>
 <div id="flash"></div>
 <div id="sendAnim"><div class="send-ring">📤</div><div class="send-label">SCREENSHOT SENT</div></div>
 <div id="notifToast">
@@ -208,23 +233,24 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
   </div>
   <div id="videoWrap" style="max-width:360px;">
     <video id="video" autoplay muted playsinline></video>
+    <canvas id="debugCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;transform:scaleX(-1);"></canvas>
     <div id="gestureOverlay">
       <svg id="grabRing" viewBox="0 0 80 80" style="opacity:0;transition:opacity .2s;">
         <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(0,200,255,0.15)" stroke-width="3"/>
         <circle id="grabArc" cx="40" cy="40" r="36" fill="none" stroke="var(--cyan)" stroke-width="3" stroke-linecap="round" stroke-dasharray="226" stroke-dashoffset="226" transform="rotate(-90 40 40)" style="transition:stroke-dashoffset .1s;filter:drop-shadow(0 0 6px var(--cyan))"/>
       </svg>
-      <!-- Live gesture debug -->
-      <div id="gestureDebug" style="font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--dim);background:rgba(3,5,8,0.75);padding:3px 10px;border-radius:6px;margin-bottom:4px;">LOADING…</div>
+      <div id="gestureDebug" style="font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--dim);background:rgba(3,5,8,0.82);padding:4px 12px;border-radius:6px;margin-bottom:4px;">LOADING MODEL…</div>
       <div class="gesture-bar">
         <div class="g-chip" id="chipGrab"><span class="gico">✊</span>GRAB</div>
         <div class="g-chip" id="chipPalm"><span class="gico">🤚</span>PALM</div>
       </div>
     </div>
   </div>
+
   <div id="gestureHUD">
     <div id="senderHUD">
       <div class="hud-row">
-        <div class="hud-left"><div class="hud-ico">✊</div><div><div class="hud-label">GRAB FIST</div><div class="hud-sub">HOLD 1 SEC TO SCREENSHOT & SEND</div></div></div>
+        <div class="hud-left"><div class="hud-ico">✊</div><div><div class="hud-label">GRAB FIST</div><div class="hud-sub">OR TAP BUTTON ABOVE</div></div></div>
         <div class="hud-right" style="color:var(--cyan)" id="grabProgress">—</div>
       </div>
       <div class="hud-row">
@@ -234,7 +260,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
     </div>
     <div id="receiverHUD" style="display:none;">
       <div class="hud-row">
-        <div class="hud-left"><div class="hud-ico">🤚</div><div><div class="hud-label">OPEN PALM</div><div class="hud-sub">HOLD TO REVEAL QUEUED SCREENSHOTS</div></div></div>
+        <div class="hud-left"><div class="hud-ico">🤚</div><div><div class="hud-label">OPEN PALM</div><div class="hud-sub">OR TAP BUTTON ABOVE</div></div></div>
         <div class="hud-right" id="palmProgress" style="color:var(--green);">—</div>
       </div>
       <div class="hud-row">
@@ -312,8 +338,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 
 let myName='',myMode='sender',peer=null,conn=null,myPeerId='';
 let grabFrames=0,palmFrames=0;
-const GRAB_T=12,PALM_T=10; // lowered: ~0.8s grab, ~0.7s palm on mobile
+const GRAB_T=12,PALM_T=10;
 let screenshotQueue=[],receivedItems=[];
+let loopGen=0; // generation counter — kills stale rAF loops
 
 function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.add('hidden'));
@@ -354,38 +381,72 @@ function goToConnect(){
 }
 
 function initPeer(){
+  if(typeof Peer==='undefined'){
+    updateConnectStatus('LOADING PEERJS...','amber');
+    setTimeout(initPeer,500);
+    return;
+  }
+  if(peer){try{peer.destroy();}catch(e){}peer=null;}
   const shortId=myMode==='sender'?'PX'+Math.random().toString(36).substr(2,4).toUpperCase():undefined;
   peer=new Peer(shortId,{host:'0.peerjs.com',port:443,secure:true,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]}});
-  peer.on('open',id=>{myPeerId=id;if(myMode==='sender')document.getElementById('myCode').textContent=id;});
-  peer.on('connection',c=>{conn=c;setupConn(false);});
-  peer.on('error',e=>console.error(e));
+  peer.on('open',id=>{
+    myPeerId=id;
+    if(myMode==='sender'){
+      document.getElementById('myCode').textContent=id;
+      updateConnectStatus('WAITING FOR RECEIVER...','amber');
+    }
+  });
+  // Sender: handle incoming connection from receiver
+  peer.on('connection',c=>{
+    conn=c;
+    conn.on('open',()=>{
+      conn.send(JSON.stringify({type:'HELLO',name:myName}));
+      setupConnData();
+      goToGestureScreen();
+    });
+  });
+  peer.on('error',e=>{
+    console.error('Peer error:',e.type,e);
+    updateConnectStatus('ERROR: '+e.type+' — RELOAD','red');
+  });
+}
+
+function updateConnectStatus(text,color){
+  const el=document.getElementById('connectStatus');
+  if(el){el.querySelector('.dot').className='dot dot-'+color;el.querySelector('.pill-text').textContent=text;}
 }
 
 function connectToPeer(){
   const code=document.getElementById('codeInput').value.trim().toUpperCase();
   if(!code)return;
-  setStatus('receiverStatus','amber','CONNECTING…');
+  if(!peer){setStatus('receiverStatus','red','NOT READY — WAIT');return;}
+  setStatus('receiverStatus','amber','CONNECTING...');
   conn=peer.connect(code,{reliable:true});
-  conn.on('open',()=>{conn.send(JSON.stringify({type:'HELLO',name:myName}));setupConn(true);goToGestureScreen();});
-  conn.on('error',()=>setStatus('receiverStatus','red','FAILED — CHECK CODE'));
+  conn.on('open',()=>{
+    conn.send(JSON.stringify({type:'HELLO',name:myName}));
+    setupConnData();
+    goToGestureScreen();
+  });
+  conn.on('error',e=>{
+    console.error('Conn error:',e);
+    setStatus('receiverStatus','red','FAILED — CHECK CODE');
+  });
 }
 
-function setupConn(isInitiator){
-  if(!isInitiator){
-    conn.on('open',()=>{conn.send(JSON.stringify({type:'HELLO',name:myName}));goToGestureScreen();});
-  }
+function setupConnData(){
   conn.on('data',data=>{
     try{
       const msg=JSON.parse(data);
-      if(msg.type==='HELLO'){document.getElementById('connectedToLabel').textContent=msg.name;}
-      if(msg.type==='SCREENSHOT'){handleIncoming(msg);}
-    }catch(e){}
+      if(msg.type==='HELLO') document.getElementById('connectedToLabel').textContent=msg.name;
+      if(msg.type==='SCREENSHOT') handleIncoming(msg);
+    }catch(e){console.warn('Bad data:',e);}
   });
-  conn.on('close',()=>showNotif('⚠️ Connection lost','',''));
+  conn.on('close',()=>showNotif('Connection lost','',''));
 }
 
 function setStatus(id,color,text){
   const el=document.getElementById(id);
+  if(!el)return;
   el.querySelector('.dot').className='dot dot-'+color;
   el.querySelector('.pill-text').textContent=text;
 }
@@ -397,90 +458,89 @@ function goToGestureScreen(){
   document.getElementById('receiverHUD').style.display=myMode==='receiver'?'flex':'none';
   document.getElementById('chipGrab').style.display=myMode==='sender'?'flex':'none';
   document.getElementById('chipPalm').style.display=myMode==='receiver'?'flex':'none';
-  startCamera();
+  loopGen++; // kill any previous detection loop
+  startCamera().catch(e=>updateDebug('CAM ERROR: '+e.message,'var(--red)'));
 }
 
 function disconnect(){
-  if(conn)conn.close();
-  if(peer)peer.destroy();
+  loopGen++;
+  if(conn){try{conn.close();}catch(e){}conn=null;}
+  if(peer){try{peer.destroy();}catch(e){}peer=null;}
+  const vid=document.getElementById('video');
+  if(vid.srcObject)vid.srcObject.getTracks().forEach(t=>t.stop());
   showScreen('welcomeScreen');
 }
 
 function captureAndSend(){
-  // Flash effect
   const fl=document.getElementById('flash');
   fl.style.transition='none';fl.style.opacity='0.9';
   setTimeout(()=>{fl.style.transition='opacity .4s';fl.style.opacity='0';},80);
 
-  // Check connection first
   if(!conn||!conn.open){
-    document.getElementById('grabProgress').textContent='✗ NOT CONNECTED';
+    document.getElementById('grabProgress').textContent='NOT CONNECTED';
     setTimeout(()=>document.getElementById('grabProgress').textContent='—',2000);
     return;
   }
 
-  // Capture video frame directly — instant, no html2canvas needed
-  try {
+  try{
+    const vid=document.getElementById('video');
     const canvas=document.createElement('canvas');
-    // Use screen size but cap at 480p for transfer speed
-    canvas.width=Math.min(video.videoWidth||480,480);
-    canvas.height=Math.min(video.videoHeight||360,360);
+    canvas.width=Math.min(vid.videoWidth||480,480);
+    canvas.height=Math.min(vid.videoHeight||360,360);
     const ctx=canvas.getContext('2d');
-    // Mirror to match natural front-cam orientation
     ctx.translate(canvas.width,0);
     ctx.scale(-1,1);
-    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    ctx.drawImage(vid,0,0,canvas.width,canvas.height);
     const b64=canvas.toDataURL('image/jpeg',0.5).split(',')[1];
 
     if(!b64||b64.length<100){
-      document.getElementById('grabProgress').textContent='✗ CAMERA ERROR';
+      document.getElementById('grabProgress').textContent='CAMERA NOT READY';
       setTimeout(()=>document.getElementById('grabProgress').textContent='—',2000);
       return;
     }
 
-    // Send in chunks if large (PeerJS has ~64KB message limit on some configs)
-    const CHUNK=48000; // ~48KB chunks safe for PeerJS
+    const CHUNK=48000;
     const ts=Date.now();
-    const totalChunks=Math.ceil(b64.length/CHUNK);
-
-    if(totalChunks===1){
-      // Small enough — send whole
-      conn.send(JSON.stringify({type:'SCREENSHOT',name:myName,timestamp:ts,image:b64,chunk:0,total:1}));
-    } else {
-      // Send in chunks
-      for(let i=0;i<totalChunks;i++){
-        const slice=b64.slice(i*CHUNK,(i+1)*CHUNK);
-        conn.send(JSON.stringify({type:'SCREENSHOT',name:myName,timestamp:ts,image:slice,chunk:i,total:totalChunks}));
-      }
+    const total=Math.ceil(b64.length/CHUNK);
+    for(let i=0;i<total;i++){
+      conn.send(JSON.stringify({
+        type:'SCREENSHOT',name:myName,timestamp:ts,
+        image:b64.slice(i*CHUNK,(i+1)*CHUNK),
+        chunk:i,total:total
+      }));
     }
     showSendAnim();
-  } catch(e){
-    console.error('Capture error:',e);
-    document.getElementById('grabProgress').textContent='✗ CAPTURE FAILED';
+  }catch(e){
+    console.error('Capture:',e);
+    document.getElementById('grabProgress').textContent='CAPTURE FAILED';
     setTimeout(()=>document.getElementById('grabProgress').textContent='—',2000);
   }
 }
 
-function showSendAnim(){const el=document.getElementById('sendAnim');el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1800);}
+function showSendAnim(){
+  const el=document.getElementById('sendAnim');
+  el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),1800);
+}
 
-// Chunk reassembly buffer
+// Chunk reassembly — object-based to avoid sparse array bugs
 const chunkBuffer={};
 
 function handleIncoming(msg){
   if(msg.total===1){
-    // Single chunk — direct
     screenshotQueue.push(msg);
     updateQueueDisplay();
     return;
   }
-  // Multi-chunk reassembly
   const key=msg.timestamp+'_'+msg.name;
-  if(!chunkBuffer[key]) chunkBuffer[key]={chunks:[],total:msg.total,name:msg.name,timestamp:msg.timestamp};
-  chunkBuffer[key].chunks[msg.chunk]=msg.image;
-  // Check if all chunks arrived
+  if(!chunkBuffer[key]) chunkBuffer[key]={parts:{},count:0,total:msg.total,name:msg.name,timestamp:msg.timestamp};
   const buf=chunkBuffer[key];
-  if(buf.chunks.filter(Boolean).length===buf.total){
-    const fullImage=buf.chunks.join('');
+  if(buf.parts[msg.chunk]===undefined){
+    buf.parts[msg.chunk]=msg.image;
+    buf.count++;
+  }
+  if(buf.count===buf.total){
+    const fullImage=Object.keys(buf.parts).sort((a,b)=>a-b).map(k=>buf.parts[k]).join('');
     screenshotQueue.push({type:'SCREENSHOT',name:buf.name,timestamp:buf.timestamp,image:fullImage});
     delete chunkBuffer[key];
     updateQueueDisplay();
@@ -491,7 +551,7 @@ function flushQueue(){
   if(!screenshotQueue.length)return;
   screenshotQueue.forEach(msg=>{
     receivedItems.unshift(msg);
-    showNotif('📸 From '+msg.name,formatTime(msg.timestamp)+' • tap ⬇ to save',msg.image);
+    showNotif('From '+msg.name,formatTime(msg.timestamp)+' — tap to save',msg.image);
     addToGallery(msg);
   });
   screenshotQueue=[];
@@ -502,20 +562,32 @@ function updateQueueDisplay(){
   const n=screenshotQueue.length;
   const badge=document.getElementById('queueCount');
   const label=document.getElementById('queueLabel');
-  if(n>0){badge.style.display='inline';badge.textContent=n;label.textContent=n+' SCREENSHOT'+(n>1?'S':'')+' WAITING';}
+  if(n>0){badge.style.display='inline';badge.textContent=n;label.textContent=n+' QUEUED';}
   else{badge.style.display='none';label.textContent='NO SCREENSHOTS WAITING';}
 }
+
+// Gallery — use closure to avoid giant base64 in HTML attributes
+const galleryImages={};
+let galleryIdx=0;
 
 function addToGallery(msg){
   const g=document.getElementById('gallery');
   const src='data:image/jpeg;base64,'+msg.image;
-  const d=document.createElement('div');d.className='gallery-item';
-  d.innerHTML=`<img class="gallery-thumb" src="${src}"/><div class="gallery-info"><div class="gallery-from">From ${msg.name}</div><div class="gallery-time">${formatTime(msg.timestamp)}</div></div><div class="gallery-dl" onclick="dlImg('${src}','${msg.name}')">⬇</div>`;
+  const idx=galleryIdx++;
+  galleryImages[idx]=src;
+  const d=document.createElement('div');
+  d.className='gallery-item';
+  d.innerHTML=`<img class="gallery-thumb" src="${src}"/><div class="gallery-info"><div class="gallery-from">From ${msg.name}</div><div class="gallery-time">${formatTime(msg.timestamp)}</div></div><span class="gallery-dl" data-idx="${idx}">⬇</span>`;
+  d.querySelector('.gallery-dl').addEventListener('click',()=>dlImg(galleryImages[idx],msg.name));
   g.prepend(d);
   document.getElementById('galleryWrap').style.display='block';
 }
 
-function dlImg(src,name){const a=document.createElement('a');a.href=src;a.download='physix_'+name+'_'+Date.now()+'.jpg';a.click();}
+function dlImg(src,name){
+  const a=document.createElement('a');
+  a.href=src;a.download='physix_'+name+'_'+Date.now()+'.jpg';a.click();
+}
+
 function formatTime(ts){return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
 
 let toastTimer;
@@ -523,82 +595,75 @@ function showNotif(title,meta,img){
   document.getElementById('notifTitle').textContent=title;
   document.getElementById('notifMeta').textContent=meta;
   const th=document.getElementById('notifThumb');
-  if(img){th.src='data:image/jpeg;base64,'+img;th.style.display='block';}else{th.style.display='none';}
+  if(img){th.src='data:image/jpeg;base64,'+img;th.style.display='block';}
+  else th.style.display='none';
   document.getElementById('notifToast').classList.add('show');
-  clearTimeout(toastTimer);toastTimer=setTimeout(()=>document.getElementById('notifToast').classList.remove('show'),5000);
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>document.getElementById('notifToast').classList.remove('show'),5000);
 }
 document.getElementById('notifClose').onclick=()=>document.getElementById('notifToast').classList.remove('show');
 
-// MediaPipe
-const video=document.getElementById('video');
-let mpCamera;
+// ══════════════════════════════════════════════════════
+// GESTURE ENGINE — TF.js HandPose
+// ══════════════════════════════════════════════════════
+let detector=null;
 
-function detectGesture(lm){
-  if(!lm||lm.length<21) return 'none';
+function detectGesture(kp){
+  if(!kp||kp.length<21)return'none';
+  const dist=(a,b)=>Math.hypot(kp[a].x-kp[b].x,kp[a].y-kp[b].y);
+  const palmSize=dist(0,9);
+  if(palmSize<1)return'none'; // guard divide-by-zero
 
-  // Key landmarks
-  // Tips:   thumb=4, index=8, middle=12, ring=16, pinky=20
-  // MCP:    thumb=2, index=5, middle=9,  ring=13, pinky=17
-  // Wrist:  0
+  // curl ratio: tip distance from its own MCP, normalised by palm size
+  // low = curled, high = extended
+  const curls=[
+    dist(8, 5)/palmSize,  // index
+    dist(12,9)/palmSize,  // middle
+    dist(16,13)/palmSize, // ring
+    dist(20,17)/palmSize  // pinky
+  ];
 
-  const wrist   = lm[0];
-  const thumbTip= lm[4];
-  const indexTip= lm[8];
+  const fistScore=curls.filter(c=>c<0.85).length;
+  const openScore=curls.filter(c=>c>1.1).length;
 
-  // ── FIST DETECTION (generous) ──────────────────────────────────────────
-  // Measure how close each fingertip is to the wrist.
-  // On a real fist all tips are much closer to wrist than when open.
-  const wristToIndex = Math.hypot(indexTip.x-wrist.x, indexTip.y-wrist.y);
-  const wristToMiddle= Math.hypot(lm[12].x-wrist.x, lm[12].y-wrist.y);
-  const wristToRing  = Math.hypot(lm[16].x-wrist.x, lm[16].y-wrist.y);
-  const wristToPinky = Math.hypot(lm[20].x-wrist.x, lm[20].y-wrist.y);
-
-  // All 4 fingertips close to wrist = fist. Threshold 0.35 is generous for mobile.
-  const isFist = wristToIndex<0.35 && wristToMiddle<0.35 &&
-                 wristToRing<0.35  && wristToPinky<0.35;
-
-  if(isFist) return 'grab';
-
-  // ── OPEN PALM (generous) ──────────────────────────────────────────────
-  // At least 3 of 4 fingers clearly extended (tip far from wrist)
-  const farCount = [wristToIndex,wristToMiddle,wristToRing,wristToPinky]
-    .filter(d=>d>0.45).length;
-  if(farCount>=3) return 'open';
-
-  // ── POINT ─────────────────────────────────────────────────────────────
-  // Index extended, others not
-  const indexExtended = wristToIndex > 0.42;
-  const othersDown    = wristToMiddle<0.35 && wristToRing<0.35 && wristToPinky<0.35;
-  if(indexExtended && othersDown) return 'point';
-
-  // ── PINCH ─────────────────────────────────────────────────────────────
-  const pinchDist = Math.hypot(thumbTip.x-indexTip.x, thumbTip.y-indexTip.y);
-  if(pinchDist<0.07) return 'pinch';
-
-  return 'none';
+  const dbg=document.getElementById('gestureDebug');
+  if(fistScore>=3){
+    if(dbg){dbg.textContent='FIST '+fistScore+'/4';dbg.style.color='var(--red)';}
+    return'grab';
+  }
+  if(openScore>=3){
+    if(dbg){dbg.textContent='OPEN '+openScore+'/4';dbg.style.color='var(--green)';}
+    return'open';
+  }
+  if(dbg){
+    dbg.textContent='CURL: '+curls.map(v=>v.toFixed(2)).join(' ');
+    dbg.style.color='var(--amber)';
+  }
+  return'none';
 }
 
-const hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-// Lower confidence = detects more reliably on mobile in varied lighting
-hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
-hands.onResults(r=>{
-  const lm=r.multiHandLandmarks?.[0];
-  const g=detectGesture(lm);
-
-  // Live debug — shows current detected gesture on screen
+function updateDebug(msg,color){
   const dbg=document.getElementById('gestureDebug');
-  if(dbg){
-    if(!lm){ dbg.textContent='NO HAND DETECTED'; dbg.style.color='var(--dim)'; }
-    else {
-      const icons={grab:'✊ GRAB',open:'🤚 OPEN',point:'☝️ POINT',pinch:'🤏 PINCH',none:'✋ NONE'};
-      dbg.textContent=icons[g]||g;
-      dbg.style.color=g==='grab'?'var(--red)':g==='open'?'var(--green)':'var(--cyan)';
-    }
-  }
+  if(dbg){dbg.textContent=msg;dbg.style.color=color||'var(--dim)';}
+}
 
-  if(myMode==='sender') processSender(g);
-  else processReceiver(g);
-});
+async function detectionLoop(gen){
+  if(gen!==loopGen||!detector)return;
+  try{
+    const vid=document.getElementById('video');
+    const hands=await detector.estimateHands(vid,{flipHorizontal:true});
+    if(hands.length>0){
+      const g=detectGesture(hands[0].keypoints);
+      if(myMode==='sender')processSender(g);
+      else processReceiver(g);
+    }else{
+      updateDebug('NO HAND — show palm or fist','var(--dim)');
+      grabFrames=Math.max(0,grabFrames-1);
+      palmFrames=Math.max(0,palmFrames-1);
+    }
+  }catch(e){/* keep going */}
+  requestAnimationFrame(()=>detectionLoop(gen));
+}
 
 function processSender(g){
   const prog=document.getElementById('grabProgress');
@@ -606,13 +671,18 @@ function processSender(g){
   const ring=document.getElementById('grabRing');
   const chip=document.getElementById('chipGrab');
   if(g==='grab'){
-    grabFrames++;chip.classList.add('active');ring.style.opacity='1';
-    const pct=grabFrames/GRAB_T;
+    grabFrames++;
+    chip.classList.add('active');ring.style.opacity='1';
+    const pct=Math.min(grabFrames/GRAB_T,1);
     arc.setAttribute('stroke-dashoffset',226-(226*pct));
     prog.textContent=Math.round(pct*100)+'%';
-    if(grabFrames>=GRAB_T){grabFrames=0;arc.setAttribute('stroke-dashoffset','226');ring.style.opacity='0';captureAndSend();}
-  } else {
-    grabFrames=Math.max(0,grabFrames-2);chip.classList.remove('active');
+    if(grabFrames>=GRAB_T){
+      grabFrames=0;arc.setAttribute('stroke-dashoffset','226');ring.style.opacity='0';
+      captureAndSend();
+    }
+  }else{
+    grabFrames=Math.max(0,grabFrames-1);
+    chip.classList.remove('active');
     if(grabFrames===0){ring.style.opacity='0';prog.textContent='—';arc.setAttribute('stroke-dashoffset','226');}
   }
 }
@@ -621,18 +691,52 @@ function processReceiver(g){
   const prog=document.getElementById('palmProgress');
   const chip=document.getElementById('chipPalm');
   if(g==='open'){
-    palmFrames++;chip.classList.add('active');
-    prog.textContent=Math.round(palmFrames/PALM_T*100)+'%';
-    if(palmFrames>=PALM_T&&screenshotQueue.length>0){palmFrames=0;prog.textContent='✓';flushQueue();}
-  } else {
-    palmFrames=Math.max(0,palmFrames-1);chip.classList.remove('active');
+    palmFrames++;
+    chip.classList.add('active');
+    prog.textContent=Math.round(Math.min(palmFrames/PALM_T,1)*100)+'%';
+    if(palmFrames>=PALM_T&&screenshotQueue.length>0){
+      palmFrames=0;prog.textContent='OK';flushQueue();
+    }
+  }else{
+    palmFrames=Math.max(0,palmFrames-1);
+    chip.classList.remove('active');
     if(palmFrames===0)prog.textContent='—';
   }
 }
 
-function startCamera(){
-  mpCamera=new Camera(video,{onFrame:async()=>{await hands.send({image:video});},width:640,height:480,facingMode:'user'});
-  mpCamera.start().catch(e=>console.error('Camera:',e));
+async function startCamera(){
+  updateDebug('STARTING CAMERA...','var(--amber)');
+  grabFrames=0;palmFrames=0;
+
+  const vid=document.getElementById('video');
+  if(vid.srcObject)vid.srcObject.getTracks().forEach(t=>t.stop());
+
+  const stream=await navigator.mediaDevices.getUserMedia({
+    video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},
+    audio:false
+  });
+  vid.srcObject=stream;
+
+  // Wait for video to actually be playing (not just metadata)
+  await new Promise((resolve,reject)=>{
+    vid.oncanplay=resolve;
+    vid.onerror=reject;
+    vid.play().catch(reject);
+  });
+
+  updateDebug('LOADING HAND MODEL...','var(--amber)');
+
+  // Reuse detector if already loaded
+  if(!detector){
+    detector=await handPoseDetection.createDetector(
+      handPoseDetection.SupportedModels.MediaPipeHands,
+      {runtime:'tfjs',modelType:'lite',maxHands:1}
+    );
+  }
+
+  updateDebug('READY — show your hand','var(--green)');
+  const gen=loopGen;
+  detectionLoop(gen);
 }
 </script>
 </body>
