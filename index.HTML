@@ -610,18 +610,38 @@ let detector=null;
 
 function detectGesture(kp){
   if(!kp||kp.length<21)return'none';
-  const dist=(a,b)=>Math.hypot(kp[a].x-kp[b].x,kp[a].y-kp[b].y);
-  const palmSize=dist(0,9);
-  if(palmSize<1)return'none'; // guard divide-by-zero
 
-  // curl ratio: tip distance from its own MCP, normalised by palm size
-  // low = curled, high = extended
+  // TF.js can return keypoints as {x,y,z} objects OR [x,y,z] arrays depending on version
+  // Normalize to always get numeric x,y
+  const px = i => {
+    const p = kp[i];
+    if(Array.isArray(p)) return p[0];
+    if(typeof p.x === 'number') return p.x;
+    return parseFloat(p.x) || 0;
+  };
+  const py = i => {
+    const p = kp[i];
+    if(Array.isArray(p)) return p[1];
+    if(typeof p.y === 'number') return p.y;
+    return parseFloat(p.y) || 0;
+  };
+
+  const dist=(a,b)=>Math.hypot(px(a)-px(b),py(a)-py(b));
+  const palmSize=dist(0,9);
+  if(palmSize<1)return'none';
+
   const curls=[
     dist(8, 5)/palmSize,  // index
     dist(12,9)/palmSize,  // middle
     dist(16,13)/palmSize, // ring
     dist(20,17)/palmSize  // pinky
   ];
+
+  // Guard against NaN values
+  if(curls.some(c=>isNaN(c))){
+    updateDebug('BAD KEYPOINTS — move hand','var(--red)');
+    return'none';
+  }
 
   const fistScore=curls.filter(c=>c<0.85).length;
   const openScore=curls.filter(c=>c>1.1).length;
@@ -647,12 +667,20 @@ function updateDebug(msg,color){
   if(dbg){dbg.textContent=msg;dbg.style.color=color||'var(--dim)';}
 }
 
+let kpFormatLogged=false;
 async function detectionLoop(gen){
   if(gen!==loopGen||!detector)return;
   try{
     const vid=document.getElementById('video');
     const hands=await detector.estimateHands(vid,{flipHorizontal:true});
     if(hands.length>0){
+      // Log keypoint format once so we can debug
+      if(!kpFormatLogged){
+        kpFormatLogged=true;
+        const kp0=hands[0].keypoints[0];
+        console.log('KP format sample:',JSON.stringify(kp0));
+        console.log('KP keys:',Object.keys(kp0));
+      }
       const g=detectGesture(hands[0].keypoints);
       if(myMode==='sender')processSender(g);
       else processReceiver(g);
